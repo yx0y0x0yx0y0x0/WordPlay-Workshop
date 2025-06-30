@@ -1,0 +1,274 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wordplay Workshop</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Poppins:wght@600&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Roboto Mono', monospace;
+      background-color: #2D3748;
+      color: #1A202C;
+    }
+    h1, h2, h3 {
+      font-family: 'Poppins', sans-serif;
+    }
+    .card {
+      background-color: #F7FAFC;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      padding: 2rem;
+      max-width: 600px;
+      margin: 2rem auto;
+    }
+    .btn-primary {
+      background-color: #F6AD55;
+      color: #1A202C;
+      font-weight: bold;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      transition: background-color 0.3s;
+    }
+    .btn-primary:hover {
+      background-color: #ED8936;
+    }
+    .btn-secondary {
+      background-color: #48BB78;
+      color: #F7FAFC;
+      font-weight: bold;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      transition: background-color 0.3s;
+    }
+    .btn-secondary:hover {
+      background-color: #38A169;
+    }
+    input[type="text"], input[type="number"] {
+      border: 2px solid #E2E8F0;
+      border-radius: 8px;
+      padding: 0.5rem;
+      width: 100%;
+      margin-bottom: 1rem;
+      transition: border-color 0.3s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #F6AD55;
+    }
+    .word-button {
+      background-color: #E2E8F0;
+      color: #1A202C;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      margin: 0.5rem;
+      transition: background-color 0.3s;
+    }
+    .word-button:hover {
+      background-color: #CBD5E0;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center">
+  <h1 class="text-4xl text-white mb-6">Wordplay Workshop</h1>
+
+  <div id="joinPhase" class="card">
+    <h2 class="text-2xl mb-4">Join or Create a Game</h2>
+    <input type="text" id="roomId" placeholder="Room ID" class="text-center">
+    <input type="text" id="playerName" placeholder="Your Name" class="text-center">
+    <input type="number" id="numPlayers" placeholder="Number of Players (2-4)" min="2" max="4" class="text-center">
+    <div class="flex justify-center space-x-4">
+      <button onclick="createRoom()" class="btn-primary">Create Room</button>
+      <button onclick="joinRoom()" class="btn-primary">Join Room</button>
+    </div>
+  </div>
+
+  <div id="waitingPhase" class="card hidden">
+    <h2 class="text-2xl mb-4">Waiting for Players</h2>
+    <p class="text-lg">Players in room: <span id="playersList" class="font-bold"></span></p>
+  </div>
+
+  <div id="wordSubmissionPhase" class="card hidden">
+    <h2 class="text-2xl mb-4">Submit Your 3 Words</h2>
+    <input type="text" id="word1" placeholder="Word 1" class="text-center">
+    <input type="text" id="word2" placeholder="Word 2" class="text-center">
+    <input type="text" id="word3" placeholder="Word 3" class="text-center">
+    <button onclick="submitWords()" class="btn-secondary">Submit</button>
+  </div>
+
+  <div id="gamePhase" class="card hidden">
+    <h2 class="text-2xl mb-4">Build the Sentence</h2>
+    <p class="text-lg">Current Sentence: "<span id="currentSentence" class="font-bold"></span>"</p>
+    <p class="text-lg">Current Player: <span id="currentTurnPlayer" class="font-bold"></span></p>
+    <div id="yourWords" class="hidden mt-4">
+      <p class="text-lg">Your Words:</p>
+      <div id="wordButtons" class="flex flex-wrap justify-center"></div>
+    </div>
+  </div>
+
+  <div id="gameOverPhase" class="card hidden">
+    <h2 class="text-2xl mb-4">Game Over!</h2>
+    <p class="text-lg">Final Sentence: "<span id="finalSentence" class="font-bold"></span>"</p>
+    <button onclick="resetToJoinPhase()" class="btn-primary mt-4">Play Again</button>
+  </div>
+
+  <script>
+    let ws;
+    let myName;
+    let roomId;
+
+    function createRoom() {
+      roomId = document.getElementById('roomId').value.trim();
+      myName = document.getElementById('playerName').value.trim();
+      const numPlayers = parseInt(document.getElementById('numPlayers').value);
+      if (!roomId || !myName || isNaN(numPlayers) || numPlayers < 2 || numPlayers > 4) {
+        alert('Please enter a valid room ID, name, and number of players (2-4).');
+        return;
+      }
+      connectWebSocket({ type: 'createRoom', roomId, playerName: myName, numPlayers });
+    }
+
+    function joinRoom() {
+      roomId = document.getElementById('roomId').value.trim();
+      myName = document.getElementById('playerName').value.trim();
+      if (!roomId || !myName) {
+        alert('Please enter a room ID and your name.');
+        return;
+      }
+      connectWebSocket({ type: 'join', roomId, playerName: myName });
+    }
+
+    function connectWebSocket(initialMessage) {
+      ws = new WebSocket('wss://s14870.fra1.piesocket.com/v3/1?api_key=rspWAH3NonoZ6uEKeKqjE2ysYQZz4BGY9w5KOLGk&notify_self=1');
+      ws.onopen = () => ws.send(JSON.stringify(initialMessage));
+      ws.onmessage = handleMessage;
+      document.getElementById('joinPhase').classList.add('hidden');
+      document.getElementById('waitingPhase').classList.remove('hidden');
+    }
+
+    function handleMessage(event) {
+      const message = JSON.parse(event.data);
+      switch (message.type) {
+        case 'playerJoined':
+          document.getElementById('playersList').textContent += message.playerName + ', ';
+          break;
+        case 'startSubmitting':
+          document.getElementById('waitingPhase').classList.add('hidden');
+          document.getElementById('wordSubmissionPhase').classList.remove('hidden');
+          break;
+        case 'yourWords':
+          localStorage.setItem('myWords', JSON.stringify(message.words));
+          document.getElementById('wordSubmissionPhase').classList.add('hidden');
+          document.getElementById('gamePhase').classList.remove('hidden');
+          break;
+        case 'gameState':
+          document.getElementById('currentSentence').textContent = message.sentence.join(' ');
+          document.getElementById('currentTurnPlayer').textContent = message.currentPlayer;
+          if (message.currentPlayer === myName) {
+            document.getElementById('yourWords').classList.remove('hidden');
+            updateWordButtons();
+          } else {
+            document.getElementById('yourWords').classList.add('hidden');
+          }
+          break;
+        case 'gameOver':
+          document.getElementById('gamePhase').classList.add('hidden');
+          document.getElementById('gameOverPhase').classList.remove('hidden');
+          document.getElementById('finalSentence').textContent = message.finalSentence.join(' ');
+          break;
+        case 'error':
+          alert(message.message);
+          resetToJoinPhase();
+          break;
+      }
+    }
+
+    function submitWords() {
+      const words = [
+        document.getElementById('word1').value.trim(),
+        document.getElementById('word2').value.trim(),
+        document.getElementById('word3').value.trim()
+      ];
+      if (words.some(w => !w)) {
+        alert('Please enter all 3 words.');
+        return;
+      }
+      ws.send(JSON.stringify({ type: 'submitWords', roomId, words }));
+    }
+
+    function updateWordButtons() {
+      const words = JSON.parse(localStorage.getItem('myWords'));
+      const wordButtons = document.getElementById('wordButtons');
+      wordButtons.innerHTML = '';
+      words.forEach(word => {
+        const button = document.createElement('button');
+        button.textContent = word;
+        button.className = 'word-button';
+        button.onclick = () => chooseWord(word);
+        wordButtons.appendChild(button);
+      });
+    }
+
+    function chooseWord(word) {
+      ws.send(JSON.stringify({ type: 'chooseWord', roomId, word }));
+      let words = JSON.parse(localStorage.getItem('myWords'));
+      words = words.filter(w => w !== word);
+      localStorage.setItem('myWords', JSON.stringify(words));
+    }
+
+    function resetToJoinPhase() {
+      document.getElementById('gameOverPhase').classList.add('hidden');
+      document.getElementById('joinPhase').classList.remove('hidden');
+      document.getElementById('playersList').textContent = '';
+      document.getElementById('roomId').value = '';
+      document.getElementById('playerName').value = '';
+      document.getElementById('numPlayers').value = '';
+      localStorage.removeItem('myWords');
+      if (ws) ws.close();
+    }
+  </script>
+</body>
+</html>
