@@ -115,14 +115,32 @@
 <body class="min-h-screen flex flex-col items-center justify-center">
   <h1 class="text-4xl text-white mb-6">Wordplay Workshop</h1>
 
-  <div id="joinPhase" class="card">
-    <h2 class="text-2xl mb-4">Join or Create a Game</h2>
-    <input type="text" id="roomId" placeholder="Room ID" class="text-center">
-    <input type="text" id="playerName" placeholder="Your Name" class="text-center">
+  <div id="initialPhase" class="card">
+    <h2 class="text-2xl mb-4">Welcome to the Game</h2>
+    <div class="flex justify-center space-x-4">
+      <button onclick="showCreateForm()" class="btn-primary">Create Room</button>
+      <button onclick="showJoinForm()" class="btn-primary">Join Room</button>
+    </div>
+  </div>
+
+  <div id="createPhase" class="card hidden">
+    <h2 class="text-2xl mb-4">Create a Game</h2>
+    <input type="text" id="roomIdCreate" placeholder="Room ID" class="text-center">
+    <input type="text" id="playerNameCreate" placeholder="Your Name" class="text-center">
     <input type="number" id="numPlayers" placeholder="Number of Players (2-4)" min="2" max="4" class="text-center">
     <div class="flex justify-center space-x-4">
-      <button onclick="createRoom()" class="btn-primary">Create Room</button>
-      <button onclick="joinRoom()" class="btn-primary">Join Room</button>
+      <button onclick="createRoom()" class="btn-secondary">Create</button>
+      <button onclick="backToInitial()" class="btn-primary">Back</button>
+    </div>
+  </div>
+
+  <div id="joinPhase" class="card hidden">
+    <h2 class="text-2xl mb-4">Join a Game</h2>
+    <input type="text" id="roomIdJoin" placeholder="Room ID" class="text-center">
+    <input type="text" id="playerNameJoin" placeholder="Your Name" class="text-center">
+    <div class="flex justify-center space-x-4">
+      <button onclick="joinRoom()" class="btn-secondary">Join</button>
+      <button onclick="backToInitial()" class="btn-primary">Back</button>
     </div>
   </div>
 
@@ -159,55 +177,166 @@
     let ws;
     let myName;
     let roomId;
+    let isHost = false;
+    let gameState = {
+      numPlayers: 0,
+      players: [],
+      phase: 'waiting',
+      allWords: [],
+      sentence: [],
+      currentPlayerIndex: 0,
+      playerHands: {}
+    };
+
+    function showCreateForm() {
+      document.getElementById('initialPhase').classList.add('hidden');
+      document.getElementById('createPhase').classList.remove('hidden');
+    }
+
+    function showJoinForm() {
+      document.getElementById('initialPhase').classList.add('hidden');
+      document.getElementById('joinPhase').classList.remove('hidden');
+    }
+
+    function backToInitial() {
+      document.getElementById('createPhase').classList.add('hidden');
+      document.getElementById('joinPhase').classList.add('hidden');
+      document.getElementById('initialPhase').classList.remove('hidden');
+      document.getElementById('roomIdCreate').value = '';
+      document.getElementById('playerNameCreate').value = '';
+      document.getElementById('numPlayers').value = '';
+      document.getElementById('roomIdJoin').value = '';
+      document.getElementById('playerNameJoin').value = '';
+    }
 
     function createRoom() {
-      roomId = document.getElementById('roomId').value.trim();
-      myName = document.getElementById('playerName').value.trim();
+      roomId = document.getElementById('roomIdCreate').value.trim();
+      myName = document.getElementById('playerNameCreate').value.trim();
       const numPlayers = parseInt(document.getElementById('numPlayers').value);
       if (!roomId || !myName || isNaN(numPlayers) || numPlayers < 2 || numPlayers > 4) {
         alert('Please enter a valid room ID, name, and number of players (2-4).');
         return;
       }
-      connectWebSocket({ type: 'createRoom', roomId, playerName: myName, numPlayers });
+      isHost = true;
+      gameState.numPlayers = numPlayers;
+      gameState.players = [{ name: myName, wordsSubmitted: [], hand: [] }];
+      connectWebSocket();
+      broadcast({ type: 'playerJoined', playerName: myName });
+      updatePlayersList();
     }
 
     function joinRoom() {
-      roomId = document.getElementById('roomId').value.trim();
-      myName = document.getElementById('playerName').value.trim();
+      roomId = document.getElementById('roomIdJoin').value.trim();
+      myName = document.getElementById('playerNameJoin').value.trim();
       if (!roomId || !myName) {
         alert('Please enter a room ID and your name.');
         return;
       }
-      connectWebSocket({ type: 'join', roomId, playerName: myName });
+      isHost = false;
+      connectWebSocket();
+      broadcast({ type: 'join', playerName: myName });
     }
 
-    function connectWebSocket(initialMessage) {
+    function connectWebSocket() {
       ws = new WebSocket('wss://s14870.fra1.piesocket.com/v3/1?api_key=rspWAH3NonoZ6uEKeKqjE2ysYQZz4BGY9w5KOLGk&notify_self=1');
-      ws.onopen = () => ws.send(JSON.stringify(initialMessage));
+      ws.onopen = () => {
+        document.getElementById('createPhase').classList.add('hidden');
+        document.getElementById('joinPhase').classList.add('hidden');
+        document.getElementById('waitingPhase').classList.remove('hidden');
+      };
       ws.onmessage = handleMessage;
-      document.getElementById('joinPhase').classList.add('hidden');
-      document.getElementById('waitingPhase').classList.remove('hidden');
+      ws.onclose = () => {
+        alert('Disconnected from server. Please try again.');
+        resetToJoinPhase();
+      };
     }
 
     function handleMessage(event) {
       const message = JSON.parse(event.data);
+      if (message.recipient && message.recipient !== myName) return;
       switch (message.type) {
         case 'playerJoined':
-          document.getElementById('playersList').textContent += message.playerName + ', ';
+          if (isHost) {
+            gameState.players.push({ name: message.playerName, wordsSubmitted: [], hand: [] });
+            broadcast({ type: 'updatePlayers', players: gameState.players.map(p => p.name) });
+            if (gameState.players.length === gameState.numPlayers) {
+              gameState.phase = 'submitting';
+              broadcast({ type: 'startSubmitting' });
+            }
+          }
+          updatePlayersList();
+          break;
+        case 'join':
+          if (isHost) {
+            if (gameState.players.length >= gameState.numPlayers) {
+              broadcastTo(message.playerName, { type: 'error', message: 'Room is full' });
+              return;
+            }
+            gameState.players.push({ name: message.playerName, wordsSubmitted: [], hand: [] });
+            broadcast({ type: 'playerJoined', playerName: message.playerName });
+            if (gameState.players.length === gameState.numPlayers) {
+              gameState.phase = 'submitting';
+              broadcast({ type: 'startSubmitting' });
+            }
+          }
+          break;
+        case 'updatePlayers':
+          gameState.players = message.players.map(name => ({ 
+            name, 
+            wordsSubmitted: gameState.players.find(p => p.name === name)?.wordsSubmitted || [], 
+            hand: gameState.players.find(p => p.name === name)?.hand || [] 
+          }));
+          updatePlayersList();
           break;
         case 'startSubmitting':
           document.getElementById('waitingPhase').classList.add('hidden');
           document.getElementById('wordSubmissionPhase').classList.remove('hidden');
           break;
+        case 'submitWords':
+          if (isHost) {
+            const player = gameState.players.find(p => p.name === message.playerName);
+            player.wordsSubmitted = message.words;
+            if (gameState.players.every(p => p.wordsSubmitted.length === 3)) {
+              gameState.allWords = shuffle(gameState.players.flatMap(p => p.wordsSubmitted));
+              gameState.players.forEach(p => {
+                p.hand = gameState.allWords.splice(0, 3);
+                broadcastTo(p.name, { type: 'yourWords', words: p.hand });
+              });
+              gameState.phase = 'playing';
+              broadcastGameState();
+            }
+          }
+          break;
+        case 'chooseWord':
+          if (isHost) {
+            const player = gameState.players[gameState.currentPlayerIndex];
+            if (player.name !== message.playerName || !player.hand.includes(message.word)) return;
+            player.hand = player.hand.filter(w => w !== message.word);
+            gameState.sentence.push(message.word);
+            do {
+              gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+            } while (gameState.players[gameState.currentPlayerIndex].hand.length === 0 && !allHandsEmpty());
+            if (allHandsEmpty()) {
+              gameState.phase = 'ended';
+              broadcast({ type: 'gameOver', finalSentence: gameState.sentence });
+            } else {
+              broadcastGameState();
+            }
+          }
+          break;
         case 'yourWords':
-          localStorage.setItem('myWords', JSON.stringify(message.words));
-          document.getElementById('wordSubmissionPhase').classList.add('hidden');
-          document.getElementById('gamePhase').classList.remove('hidden');
+          if (message.words) {
+            localStorage.setItem('myWords', JSON.stringify(message.words));
+            document.getElementById('wordSubmissionPhase').classList.add('hidden');
+            document.getElementById('gamePhase').classList.remove('hidden');
+          }
           break;
         case 'gameState':
+          gameState.sentence = message.sentence;
+          gameState.currentPlayerIndex = message.currentPlayerIndex;
           document.getElementById('currentSentence').textContent = message.sentence.join(' ');
-          document.getElementById('currentTurnPlayer').textContent = message.currentPlayer;
-          if (message.currentPlayer === myName) {
+          document.getElementById('currentTurnPlayer').textContent = gameState.players[message.currentPlayerIndex].name;
+          if (gameState.players[message.currentPlayerIndex].name === myName) {
             document.getElementById('yourWords').classList.remove('hidden');
             updateWordButtons();
           } else {
@@ -236,11 +365,11 @@
         alert('Please enter all 3 words.');
         return;
       }
-      ws.send(JSON.stringify({ type: 'submitWords', roomId, words }));
+      broadcast({ type: 'submitWords', playerName: myName, words });
     }
 
     function updateWordButtons() {
-      const words = JSON.parse(localStorage.getItem('myWords'));
+      const words = JSON.parse(localStorage.getItem('myWords') || '[]');
       const wordButtons = document.getElementById('wordButtons');
       wordButtons.innerHTML = '';
       words.forEach(word => {
@@ -253,20 +382,71 @@
     }
 
     function chooseWord(word) {
-      ws.send(JSON.stringify({ type: 'chooseWord', roomId, word }));
-      let words = JSON.parse(localStorage.getItem('myWords'));
+      broadcast({ type: 'chooseWord', playerName: myName, word });
+      let words = JSON.parse(localStorage.getItem('myWords') || '[]');
       words = words.filter(w => w !== word);
       localStorage.setItem('myWords', JSON.stringify(words));
     }
 
+    function updatePlayersList() {
+      document.getElementById('playersList').textContent = gameState.players.map(p => p.name).join(', ');
+    }
+
+    function broadcast(message) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ ...message, roomId }));
+      }
+    }
+
+    function broadcastTo(playerName, message) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ ...message, roomId, recipient: playerName }));
+      }
+    }
+
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    }
+
+    function allHandsEmpty() {
+      return gameState.players.every(p => p.hand.length === 0);
+    }
+
+    function broadcastGameState() {
+      broadcast({
+        type: 'gameState',
+        sentence: gameState.sentence,
+        currentPlayerIndex: gameState.currentPlayerIndex
+      });
+    }
+
     function resetToJoinPhase() {
+      document.getElementById('waitingPhase').classList.add('hidden');
+      document.getElementById('wordSubmissionPhase').classList.add('hidden');
+      document.getElementById('gamePhase').classList.add('hidden');
       document.getElementById('gameOverPhase').classList.add('hidden');
-      document.getElementById('joinPhase').classList.remove('hidden');
+      document.getElementById('initialPhase').classList.remove('hidden');
       document.getElementById('playersList').textContent = '';
-      document.getElementById('roomId').value = '';
-      document.getElementById('playerName').value = '';
+      document.getElementById('roomIdCreate').value = '';
+      document.getElementById('playerNameCreate').value = '';
       document.getElementById('numPlayers').value = '';
+      document.getElementById('roomIdJoin').value = '';
+      document.getElementById('playerNameJoin').value = '';
       localStorage.removeItem('myWords');
+      gameState = {
+        numPlayers: 0,
+        players: [],
+        phase: 'waiting',
+        allWords: [],
+        sentence: [],
+        currentPlayerIndex: 0,
+        playerHands: {}
+      };
+      isHost = false;
       if (ws) ws.close();
     }
   </script>
